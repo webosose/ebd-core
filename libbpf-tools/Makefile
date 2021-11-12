@@ -53,6 +53,7 @@ APPS = \
 	tcpconnlat \
 	tcprtt \
 	vfsstat \
+	memleak \
 	#
 
 FSDIST_ALIASES = btrfsdist ext4dist nfsdist xfsdist
