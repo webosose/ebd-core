@@ -2,6 +2,7 @@
 #define __MEMLEAK_H
 
 #define BPF_MAX_STACK_DEPTH 127
+#define TASK_COMM_LEN		16
 
 struct alloc_info_t {
         __u64 size;

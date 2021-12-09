@@ -5,7 +5,10 @@
 
 #define MAX_ENTRIES 10248
 
-const volatile bool is_kernel = true;
+const volatile bool kernel_threads_only = false;
+const volatile bool user_threads_only = false;
+const volatile pid_t targ_tgid = -1;
+const volatile pid_t targ_pid = -1;
 
 struct {
         __uint(type, BPF_MAP_TYPE_HASH);
@@ -30,9 +33,7 @@ struct {
 
 struct {
         __uint(type, BPF_MAP_TYPE_STACK_TRACE);
-        __uint(max_entries, MAX_ENTRIES);
         __uint(key_size, sizeof(u32));
-        __uint(value_size, sizeof(struct bpf_stacktrace));
 } stack_traces SEC(".maps");
 
 struct {
@@ -65,6 +66,8 @@ int gen_alloc_enter(struct pt_regs *ctx, size_t size)
         u64 size64 = size;
         bpf_map_update_elem(&sizes, &pid, &size64, BPF_OK);
 
+        bpf_printk("alloc entered, size = %u\\n", size);
+
         return 0;
 }
 
@@ -88,6 +91,9 @@ int gen_alloc_exit2(struct pt_regs *ctx, u64 address)
                 update_statistics_add(info.stack_id, info.size);
         }
 
+        bpf_printk("alloc exited, size = %lu, result = %lx\\n",
+                        info.size, address);
+
         return 0;
 }
 
@@ -98,4 +104,5 @@ int tracepoint__kmem__kmalloc(struct trace_event_raw_kmem_alloc *args)
         return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
 }
 
-char LICENSE[] SEC("license") = "GPL";
+char _license[] SEC("license") = "GPL";
+__u32 _version SEC("version") = 1;
