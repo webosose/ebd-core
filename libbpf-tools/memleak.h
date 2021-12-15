@@ -15,8 +15,4 @@ struct combined_alloc_info_t {
         __u64 number_of_allocs;
 };
 
-struct bpf_stacktrace {
-        __u64 ip[BPF_MAX_STACK_DEPTH];
-};
-
 #endif

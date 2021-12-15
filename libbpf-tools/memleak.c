@@ -22,7 +22,7 @@ static struct env {
     .tid = -1,
     .stack_storage_size = 1024,
     .perf_max_stack_depth = 127,
-    .duration = 99999999,
+    .duration = 5,
 };
 
 const char *argp_program_version = "memleak 0.1";
@@ -175,9 +175,10 @@ int main(int argc, char **argv)
 		goto cleanup;
 	}
 
-    print_outstanding(ksyms, syms_cache, obj);
-
-    sleep(env.duration);
+    do {
+        sleep(env.duration);
+        print_outstanding(ksyms, syms_cache, obj);
+    } while(1);    
 
 cleanup:
     memleak_bpf__destroy(obj);
