@@ -1,3 +1,4 @@
+
 #include <vmlinux.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
@@ -60,6 +61,27 @@ void update_statistics_add(u64 stack_id, u64 sz)
 }
 
 static __always_inline
+void update_statistics_del(u64 stack_id, u64 sz)
+{
+        struct combined_alloc_info_t *existing_cinfo;
+        struct combined_alloc_info_t cinfo = {0};
+
+        existing_cinfo = bpf_map_lookup_elem(&combined_allocs, &stack_id);
+        if (existing_cinfo != 0)
+                cinfo = *existing_cinfo;
+
+        if (sz >= cinfo.total_size)
+                cinfo.total_size = 0;
+        else
+                cinfo.total_size -= sz;
+
+        if (cinfo.number_of_allocs > 0)
+                cinfo.number_of_allocs -= 1;
+
+        bpf_map_update_elem(&combined_allocs, &stack_id, &cinfo, BPF_OK);
+}
+
+static __always_inline
 int gen_alloc_enter(struct pt_regs *ctx, size_t size)
 {
         u64 pid = bpf_get_current_pid_tgid();
@@ -97,11 +119,77 @@ int gen_alloc_exit2(struct pt_regs *ctx, u64 address)
         return 0;
 }
 
+static __always_inline
+int gen_free_enter(struct pt_regs *ctx, void *address)
+{
+        u64 addr = (u64)address;
+        struct alloc_info_t *info = bpf_map_lookup_elem(&allocs, &addr);
+
+        if (info == 0)
+                return 0;
+
+        bpf_map_delete_elem(&allocs, &addr);
+        update_statistics_del(info->stack_id, info->size);
+
+        bpf_printk("free enterd, address = %lx, size = %lu\\n",
+                        address, info->size);
+
+        return 0;
+}
+
 SEC("tracepoint/kmem/kmalloc")
 int tracepoint__kmem__kmalloc(struct trace_event_raw_kmem_alloc *args)
 {
         gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
         return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+}
+
+SEC("tracepoint/kmem/kmalloc_node")
+int tracepoint__kmem__kmalloc_node(struct trace_event_raw_kmem_alloc_node *args)
+{
+        gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
+        return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+}
+
+SEC("tracepoint/kmem/kfree")
+int tracepoint__kmem__kfree(struct trace_event_raw_kmem_free *args)
+{
+        return gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
+}
+
+#if 0   // not exist
+SEC("tracepoint/kmem/kmem_cache_alloc")
+int tracepoint__kmem__kmem_cache_alloc(struct trace_event_raw_kmem_cache_alloc *args)
+{
+        gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
+        return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+}
+
+SEC("tracepoint/kmem/kmem_cache_alloc_node")
+int tracepoint__kmem__kmem_cache_alloc_node(struct trace_event_raw_kmem_cache_alloc_node *args)
+{
+        gen_alloc_enter((struct pt_regs *)args, args->bytes_alloc);
+        return gen_alloc_exit2((struct pt_regs *)args, (size_t)args->ptr);
+}
+
+SEC("tracepoint/kmem/kmem_cache_free")
+int tracepoint__kmem__kmem_cache_free(struct trace_event_raw_kmem_cache_free *args)
+{
+        return gen_free_enter((struct pt_regs *)args, (void *)args->ptr);
+}
+#endif
+
+SEC("tracepoint/kmem/mm_page_alloc")
+int tracepoint__kmem__mm_page_alloc(struct trace_event_raw_mm_page_alloc *args)
+{
+        gen_alloc_enter((struct pt_regs *)args, PAGE_SIZE << args->order);
+        return gen_alloc_exit2((struct pt_regs *)args, args->pfn);
+}
+
+SEC("tracepoint/kmem/mm_page_free")
+int tracepoint__kmem__mm_page_free(struct trace_event_raw_mm_page_free *args)
+{
+        return gen_free_enter((struct pt_regs *)args, (void *)args->pfn);
 }
 
 char _license[] SEC("license") = "GPL";
