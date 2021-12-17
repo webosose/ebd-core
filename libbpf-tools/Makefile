@@ -54,6 +54,7 @@ APPS = \
 	tcprtt \
 	vfsstat \
 	memleak \
+	lsan \
 	#
 
 FSDIST_ALIASES = btrfsdist ext4dist nfsdist xfsdist
