@@ -41,6 +41,7 @@ APPS = \
 	numamove \
 	offcputime \
 	opensnoop \
+	profile \
 	readahead \
 	runqlat \
 	runqlen \
