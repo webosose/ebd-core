@@ -34,6 +34,7 @@ static struct env {
 };
 
 static pid_t target_pid = 0;
+static pid_t top_stacks = 10;
 static const char *libc_path = NULL;
 
 const char *argp_program_version = "memleak 0.1";
@@ -49,6 +50,8 @@ static const struct argp_option opts[] = {
 	{ "pid", 'p', "PID", 0, "Process ID to trace"},
 	{ "kernel-thread-olny", 'k', NULL, 0,
 	  "Kernel threads only (no user threads)" },
+	{ "top", 'T', "count", 0,
+	  "display only this many top allocating stacks (by size)" },
 	{ "verbose", 'v', NULL, 0, "Verbose debug output" },
 	{ NULL, 'h', NULL, OPTION_HIDDEN, "Show the full help" },
 	{},
@@ -64,7 +67,7 @@ static int libbpf_print_fn(enum libbpf_print_level level,
 
 static error_t parse_arg(int key, char *arg, struct argp_state *state)
 {
-	long pid;
+	long pid, top;
 
 	switch (key) {
 	case 'h':
@@ -78,6 +81,10 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 			argp_usage(state);
 		}
 		target_pid = pid;
+		break;
+	case 'T':
+		top = strtol(arg, NULL, 10);
+		top_stacks = top;
 		break;
 	case 'v':
 		env.verbose = true;
@@ -94,17 +101,25 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 	return 0;
 }
 
+static int compar(const void *a, const void *b)
+{
+	__u64 x = ((struct ip_stat *) a)->size;
+	__u64 y = ((struct ip_stat *) b)->size;
+	return x > y ? -1 : !(x == y);
+}
+
 static void print_outstanding(struct ksyms *ksyms, struct syms_cache *syms_cache,
 				struct memleak_bpf *obj)
 {
-	unsigned long lookup_key = 0, next_key, *ip;
+	unsigned long lookup_key = 0, next_key;
 	const struct ksym *ksym;
 	const struct syms *syms;
 	const struct sym *sym;
-	int i, err, ifd, sfd, scnt = 0, top_stacks = 10;
+	int i, j, err, ifd, sfd, rows = 0;
 	struct alloc_info_t val;
 	time_t timer;
 	struct tm *t;
+	static struct ip_stat stack_ips[MAX_ENTRIES];
 
 	timer = time(NULL);
 	t = localtime(&timer);
@@ -112,69 +127,65 @@ static void print_outstanding(struct ksyms *ksyms, struct syms_cache *syms_cache
 	printf("\n[%02d:%02d:%02d] Top %u stacks with outstanding allocations:\n",
 		t->tm_hour, t->tm_min, t->tm_sec, top_stacks);
 
-	ip = calloc(env.perf_max_stack_depth, sizeof(*ip));
-	if (!ip) {
-		warn("failed to alloc ip\n");
-		return;
-	}
-
 	ifd = bpf_map__fd(obj->maps.allocs);
 	sfd = bpf_map__fd(obj->maps.stack_traces);
 
-	while (!bpf_map_get_next_key(ifd, &lookup_key, &next_key) && (scnt++ < top_stacks)) {
+	while (!bpf_map_get_next_key(ifd, &lookup_key, &next_key)) {
 		err = bpf_map_lookup_elem(ifd, &next_key, &val);
 		if (err < 0) {
 			warn("failed to lookup info: %d\n", err);
-			goto cleanup;
+			return;
 		}
 		lookup_key = next_key;
-		if (val.kern_stack_id < 0 || env.user_threads_only)
+		if (val.kern_stack_id < 0 || target_pid)
 			goto print_ustack;
 
-		if (bpf_map_lookup_elem(sfd, &val.kern_stack_id, ip) != 0) {		
-			warn("    [Missed Kernel Stack]\n");
-			goto print_ustack;
-		}
+		if (bpf_map_lookup_elem(sfd, &val.kern_stack_id, stack_ips[rows].ip))
+			continue;
 
-		printf("\t%lld bytes in %d allocations from stack\n", val.size, 1);
-		for (i = 0; i < env.perf_max_stack_depth && ip[i]; i++) {
-			ksym = ksyms__map_addr(ksyms, ip[i]);
-			printf("    %#lx %s\n", ksym->addr, ksym ? ksym->name : "Unknown");
-		}
-		printf("\n");
+		goto skip_ustack;
 
 print_ustack:
-		if (val.user_stack_id < 0 || env.kernel_threads_only)
+		if (val.user_stack_id < 0 ||
+			bpf_map_lookup_elem(sfd, &val.user_stack_id, stack_ips[rows].ip))
 			continue;
-
-		if (bpf_map_lookup_elem(sfd, &val.user_stack_id, ip) != 0) {
-			warn("    [Missed User Stack]\n");
-			continue;
-		}
-
-		syms = syms_cache__get_syms(syms_cache, val.pid);
-		if (!syms) {
-			warn("failed to get syms\n");
-			goto skip_ustack;
-		}
-
-		if (val.kern_stack_id < 0)
-			printf("\t%lld bytes in %d allocations from user stack\n", val.size, 1);
-
-		for (i = 0; i < env.perf_max_stack_depth && ip[i]; i++) {
-			sym = syms__map_addr(syms, ip[i]);
-			if (sym)
-				printf("    %#016lx %s\n", ip[i], sym->name);
-			else
-				printf("    %#016lx [unknown]\n", ip[i]);
-		}
 
 skip_ustack:
-		printf("    %-16s %s (%d)\n\n", "-", val.comm, val.pid);
+		stack_ips[rows++].size = val.size;
 	}
 
-cleanup:
-	free(ip);
+	qsort(stack_ips, rows, sizeof(struct ip_stat), compar);
+	rows = rows < top_stacks ? rows : top_stacks;
+
+	if (env.kernel_threads_only || !target_pid) {
+		for (j = 0; j < rows; j++) {
+			printf("\t%lld bytes in %d allocations from stack\n", stack_ips[j].size, 1);
+			for (i = 0; i < env.perf_max_stack_depth && stack_ips[j].ip[i]; i++) {
+				ksym = ksyms__map_addr(ksyms, stack_ips[j].ip[i]);
+				printf("    %#lx %s\n", ksym->addr, ksym ? ksym->name : "Unknown");
+			}
+			printf("\n");
+		}
+		return;
+	}
+
+	syms = syms_cache__get_syms(syms_cache, val.pid);
+	if (!syms) {
+		warn("failed to get syms\n");
+		goto skip_ustack;
+	}
+
+	for (j = 0; j < rows; j++) {
+		printf("\t%lld bytes in %d allocations from user stack\n", stack_ips[j].size, 1);
+		for (i = 0; i < env.perf_max_stack_depth && stack_ips[j].ip[i]; i++) {
+			sym = syms__map_addr(syms, stack_ips[j].ip[i]);
+			if (sym)
+				printf("    %#016lx %s\n", stack_ips[j].ip[i], sym->name);
+			else
+				printf("    %#016lx [unknown]\n", stack_ips[j].ip[i]);
+		}
+		printf("    %-16s %s (%d)\n\n", "-", val.comm, val.pid);
+	}
 }
 
 static int get_libc_path(char *path)

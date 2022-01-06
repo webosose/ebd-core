@@ -9,8 +9,6 @@
 
 #include "memleak.h"
 
-#define MAX_ENTRIES 10248
-
 const volatile bool kernel_threads_only = false;
 const volatile bool user_threads_only = false;
 const volatile pid_t targ_tgid = -1;

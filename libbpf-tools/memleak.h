@@ -1,6 +1,7 @@
 #ifndef __MEMLEAK_H
 #define __MEMLEAK_H
 
+#define MAX_ENTRIES 10248
 #define BPF_MAX_STACK_DEPTH	127
 #define TASK_COMM_LEN		16
 #define BPF_F_USER_STACK	256
@@ -21,6 +22,11 @@ struct alloc_info_t {
 struct combined_alloc_info_t {
 	__u64 total_size;
 	__u64 number_of_allocs;
+};
+
+struct ip_stat {
+	__u64 size;
+	unsigned long ip[BPF_MAX_STACK_DEPTH];
 };
 
 #endif
