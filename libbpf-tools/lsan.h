@@ -1,13 +1,19 @@
 #ifndef __LSAN_H
 #define __LSAN_H
 
-#define BPF_MAX_STACK_DEPTH	127
-#define TASK_COMM_LEN	16
+#define BPF_F_USER_STACK	256
+
+enum chunk_tag {
+	DIRECTLY_LEAKED = 0,  // default
+	INDIRECTLY_LEAKED = 1,
+	REACHABLE = 2,
+	IGNORED = 3
+};
 
 struct lsan_info_t {
 	__u64 size;
-	__u64 timestamp_ns;
 	int stack_id;
+	enum chunk_tag tag;
 };
 
 #endif /* __LSAN_H */
