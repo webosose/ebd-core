@@ -8,6 +8,7 @@ INSTALL ?= install
 prefix ?= /usr/local
 
 APPS = \
+	lsan \
 	memleak \
 	#
 
@@ -31,7 +32,7 @@ msg = @printf '  %-8s %s%s\n' "$(1)" "$(notdir $(2))" "$(if $(3), $(3))";
 MAKEFLAGS += --no-print-directory
 endif
 
-SKELS = memleak.skel.h
+SKELS = memleak.skel.h lsan.skel.h
 $(shell mkdir -p $(OUTPUT) && cp -a $(SKELS) $(OUTPUT))
 
 .PHONY: clean
