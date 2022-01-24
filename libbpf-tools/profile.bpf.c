@@ -18,7 +18,7 @@ extern int LINUX_KERNEL_VERSION __kconfig;
 
 struct {
 	__uint(type, BPF_MAP_TYPE_STACK_TRACE);
-	__type(key, u32);
+	__uint(key_size, sizeof(u32));
 } stackmap SEC(".maps");
 
 struct {

@@ -457,7 +457,12 @@ int main(int argc, char **argv)
 	}
 
 	libbpf_set_print(libbpf_print_fn);
-	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
+	err = bump_memlock_rlimit();
+	if (err) {
+	       fprintf(stderr, "failed to increase rlimit: %d\n", err);
+	       return 1;
+	}
+
 
 	nr_cpus = libbpf_num_possible_cpus();
 	if (nr_cpus < 0) {
