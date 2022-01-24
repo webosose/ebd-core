@@ -58,7 +58,6 @@ $(OUTPUT)/%.o: %.c $(wildcard %.h) $(LIBBPF_OBJ) | $(OUTPUT)
 # Build libbpf.a
 $(LIBBPF_OBJ): $(wildcard $(LIBBPF_SRC)/*.[ch]) | $(OUTPUT)/libbpf
 	$(call msg,LIB,$@)
-	$(Q)patch -tN -d ../src/cc/libbpf -p1 < remove_btf_dependency.patch || true
 	$(Q)$(MAKE) -C $(LIBBPF_SRC) BUILD_STATIC_ONLY=1		      \
 			OBJDIR=$(dir $@)/libbpf DESTDIR=$(dir $@)		      \
 			INCLUDEDIR= LIBDIR= UAPIDIR=			      \
