@@ -7,8 +7,6 @@
 #include "profile.h"
 #include "maps.bpf.h"
 
-#define MAX_ENTRIES		10240
-
 const volatile bool kernel_stacks_only = false;
 const volatile bool user_stacks_only = false;
 const volatile bool include_idle = false;

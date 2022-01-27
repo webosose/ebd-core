@@ -21,6 +21,12 @@
 #include "profile.skel.h"
 #include "trace_helpers.h"
 
+/* This structure combines key_t and count which should be sorted together */
+struct key_ext_t {
+	struct key_t k;
+	__u64 v;
+};
+
 static struct env {
 	pid_t pid;
 	pid_t tid;
@@ -237,18 +243,52 @@ static int stack_id_err(int stack_id)
 	return (stack_id < 0) && (stack_id != -EFAULT);
 }
 
+static int cmp_counts(const void *dx, const void *dy)
+{
+	__u64 x = ((struct key_ext_t *) dx)->v;
+	__u64 y = ((struct key_ext_t *) dy)->v;
+	return x > y ? -1 : !(x == y);
+}
+
+static bool read_counts_map(int fd, struct key_ext_t *items, __u32 *count)
+{
+	struct key_t empty = {};
+	struct key_t *lookup_key = &empty;
+	int i = 0;
+	int err;
+
+	while (!bpf_map_get_next_key(fd, lookup_key, &items[i].k)) {
+
+		err = bpf_map_lookup_elem(fd, &items[i].k, &items[i].v);
+		if (err < 0) {
+			fprintf(stderr, "failed to lookup counts: %d\n", err);
+			return false;
+		}
+		if (items[i].v == 0)
+			continue;
+
+		lookup_key = &items[i].k;
+		i++;
+	}
+
+	*count = i;
+	return true;
+}
+
 static void print_map(struct ksyms *ksyms, struct syms_cache *syms_cache,
 		      struct profile_bpf *obj)
 {
-	struct key_t lookup_key = {}, next_key;
 	const struct ksym *ksym;
 	const struct syms *syms;
 	const struct sym *sym;
-	int err, i, cfd, sfd;
+	int i, j, cfd, sfd;
+	__u32 nr_count;
+	struct key_t *k;
+	__u64 v;
 	unsigned long *ip;
-	__u64 val;
 	bool has_collision = false;
 	unsigned int missing_stacks = 0;
+	struct key_ext_t counts[MAX_ENTRIES];
 
 	ip = calloc(env.perf_max_stack_depth, sizeof(*ip));
 	if (!ip) {
@@ -259,104 +299,105 @@ static void print_map(struct ksyms *ksyms, struct syms_cache *syms_cache,
 	cfd = bpf_map__fd(obj->maps.counts);
 	sfd = bpf_map__fd(obj->maps.stackmap);
 
-	while (!bpf_map_get_next_key(cfd, &lookup_key, &next_key)) {
-		err = bpf_map_lookup_elem(cfd, &next_key, &val);
-		if (err < 0) {
-			fprintf(stderr, "failed to lookup counts: %d\n", err);
-			goto cleanup;
-		}
-		lookup_key = next_key;
-		if (val == 0)
-			continue;
+	nr_count = MAX_ENTRIES;
+	if (!read_counts_map(cfd, counts, &nr_count)) {
+		goto cleanup;
+	}
 
-		if (!env.user_stacks_only && stack_id_err(next_key.kern_stack_id)) {
+	qsort(counts, nr_count, sizeof(counts[0]), cmp_counts);
+
+	for (i = 0; i < nr_count; i++) {
+		k = &counts[i].k;
+		v = counts[i].v;
+
+		if (!env.user_stacks_only && stack_id_err(k->kern_stack_id)) {
 			missing_stacks += 1;
-			has_collision |= (next_key.kern_stack_id == -EEXIST);
+			has_collision |= (k->kern_stack_id == -EEXIST);
 		}
-		if (!env.kernel_stacks_only && stack_id_err(next_key.user_stack_id)) {
+		if (!env.kernel_stacks_only && stack_id_err(k->user_stack_id)) {
 			missing_stacks += 1;
-			has_collision |= (next_key.user_stack_id == -EEXIST);
+			has_collision |= (k->user_stack_id == -EEXIST);
 		}
 
 		if (env.folded) {
 			// print folded stack output
-			printf("%s", next_key.name);
+			printf("%s", k->name);
 
 			if (!env.kernel_stacks_only) {
-				if (stack_id_err(next_key.user_stack_id))
+				if (stack_id_err(k->user_stack_id))
 					printf(";[Missed User Stack]");
-				else if (next_key.user_stack_id >= 0 &&
-					 bpf_map_lookup_elem(sfd, &next_key.user_stack_id, ip) == 0) {
-					syms = syms_cache__get_syms(syms_cache, next_key.pid);
+				else if (k->user_stack_id >= 0 &&
+					 bpf_map_lookup_elem(sfd, &k->user_stack_id, ip) == 0) {
+					syms = syms_cache__get_syms(syms_cache, k->pid);
 					if (!syms) {
 						fprintf(stderr, "failed to get syms\n");
 					} else {
-						for (i = 0; i < env.perf_max_stack_depth && ip[i]; i++) {
-							sym = syms__map_addr(syms, ip[i]);
+						for (j = 0; j < env.perf_max_stack_depth && ip[j]; j++) {
+							sym = syms__map_addr(syms, ip[j]);
 							printf(";%s", sym ? sym->name : "[unknown]");
 						}
 					}
 				}
 			}
 			if (!env.user_stacks_only) {
-				if (env.delimiter && next_key.user_stack_id >= 0 && next_key.kern_stack_id >= 0)
+				if (env.delimiter && k->user_stack_id >= 0 && k->kern_stack_id >= 0)
 					printf(";-");
 
-				if (stack_id_err(next_key.kern_stack_id))
+				if (stack_id_err(k->kern_stack_id))
 					printf(";[Missed Kernel Stack]");
-				else if (next_key.kern_stack_id >= 0 &&
-					 bpf_map_lookup_elem(sfd, &next_key.kern_stack_id, ip) == 0) {
-					for (i = 0; i < env.perf_max_stack_depth && ip[i]; i++) {
-						ksym = ksyms__map_addr(ksyms, ip[i]);
+				else if (k->kern_stack_id >= 0 &&
+					 bpf_map_lookup_elem(sfd, &k->kern_stack_id, ip) == 0) {
+					for (j = 0; j < env.perf_max_stack_depth && ip[j]; j++) {
+						ksym = ksyms__map_addr(ksyms, ip[j]);
 						printf(";%s", ksym ? ksym->name : "[unknown]");
 					}
-					if (next_key.kernel_ip) {
-						ksym = ksyms__map_addr(ksyms, next_key.kernel_ip);
+					if (k->kernel_ip) {
+						ksym = ksyms__map_addr(ksyms, k->kernel_ip);
 						printf(";%s", ksym ? ksym->name : "[unknown]");
 					}
 				}
 			}
-			printf(" %lld\n", val);
+			printf(" %lld\n", v);
 		} else {
 			// print default multi-line stack output
 			if (!env.user_stacks_only) {
-				if (stack_id_err(next_key.kern_stack_id))
+				if (stack_id_err(k->kern_stack_id))
 					printf("    [Missed Kernel Stack]\n");
-				else if (next_key.kern_stack_id >= 0 &&
-					 bpf_map_lookup_elem(sfd, &next_key.kern_stack_id, ip) == 0) {
-					for (i = 0; i < env.perf_max_stack_depth && ip[i]; i++) {
-						ksym = ksyms__map_addr(ksyms, ip[i]);
+				else if (k->kern_stack_id >= 0 &&
+					 bpf_map_lookup_elem(sfd, &k->kern_stack_id, ip) == 0) {
+					for (j = 0; j < env.perf_max_stack_depth && ip[j]; j++) {
+						ksym = ksyms__map_addr(ksyms, ip[j]);
 						printf("    %s\n", ksym ? ksym->name : "[unknown]");
 					}
-					if (next_key.kernel_ip) {
-						ksym = ksyms__map_addr(ksyms, next_key.kernel_ip);
+					if (k->kernel_ip) {
+						ksym = ksyms__map_addr(ksyms, k->kernel_ip);
 						printf("    %s\n", ksym ? ksym->name : "[unknown]");
 					}
 				}
 			}
 
 			if (!env.kernel_stacks_only) {
-				if (env.delimiter && next_key.kern_stack_id >= 0 && next_key.user_stack_id >= 0)
+				if (env.delimiter && k->kern_stack_id >= 0 && k->user_stack_id >= 0)
 					printf("    --\n");
 
-				if (stack_id_err(next_key.user_stack_id))
+				if (stack_id_err(k->user_stack_id))
 					printf("    [Missed User Stack]\n");
-				else if (next_key.user_stack_id >= 0 &&
-					 bpf_map_lookup_elem(sfd, &next_key.user_stack_id, ip) == 0) {
-					syms = syms_cache__get_syms(syms_cache, next_key.pid);
+				else if (k->user_stack_id >= 0 &&
+					 bpf_map_lookup_elem(sfd, &k->user_stack_id, ip) == 0) {
+					syms = syms_cache__get_syms(syms_cache, k->pid);
 					if (!syms) {
 						fprintf(stderr, "failed to get syms\n");
 					} else {
-						for (i = 0; i < env.perf_max_stack_depth && ip[i]; i++) {
-							sym = syms__map_addr(syms, ip[i]);
+						for (j = 0; j < env.perf_max_stack_depth && ip[j]; j++) {
+							sym = syms__map_addr(syms, ip[j]);
 							printf("    %s\n", sym ? sym->name : "[unknown]");
 						}
 					}
 				}
 			}
 
-			printf("    %-16s %s (%d)\n", "-", next_key.name, next_key.pid);
-			printf("        %lld\n\n", val);
+			printf("    %-16s %s (%d)\n", "-", k->name, k->pid);
+			printf("        %lld\n\n", v);
 		}
 	}
 
