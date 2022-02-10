@@ -7,10 +7,7 @@ CFLAGS := -g -O2 -Wall
 INSTALL ?= install
 prefix ?= /usr/local
 
-APPS = \
-	lsan \
-	memleak \
-	#
+APPS = ebd
 
 COMMON_OBJ = \
 	$(OUTPUT)/trace_helpers.o \
@@ -18,6 +15,8 @@ COMMON_OBJ = \
 	$(OUTPUT)/errno_helpers.o \
 	$(OUTPUT)/map_helpers.o \
 	$(OUTPUT)/uprobe_helpers.o \
+	$(OUTPUT)/memleak.o \
+	$(OUTPUT)/lsan.o \
 	#
 
 .PHONY: all
@@ -47,20 +46,38 @@ $(OUTPUT) $(OUTPUT)/libbpf:
 $(APPS): %: $(OUTPUT)/%.o $(LIBBPF_OBJ) $(COMMON_OBJ) | $(OUTPUT)
 	$(call msg,BINARY,$@)
 	$(Q)mkdir -p $(OUTPUT)/bin
-	$(Q)$(CC) $(CFLAGS) $^ $(LDFLAGS) -lelf -lz -o $(OUTPUT)/bin/$@
+	$(Q)$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LIBBPF_OBJ)			  \
+			-lelf -lz -o $(OUTPUT)/bin/$@
 
-$(patsubst %,$(OUTPUT)/%.o,$(APPS)): %.o: %.skel.h
+$(patsubst %,$(OUTPUT)/%.o,$(APPS)): %.o: $(SKELS)
+
+FUNCS = \
+	$(shell echo "\ main") \
+	$(shell echo "\ argp_program_doc")
+
+define modified_for_ebd
+	$(Q)if [ -z $(findstring $(APPS),$1) ]; then \
+		sed -i "s|*argp_program|*$(basename $(notdir $1))_argp_program|" \
+			$(filter %.c,$2); \
+		for funcs in $(FUNCS); do \
+			sed -i "s|$$funcs|\ $$(echo $(basename $(notdir $1))_$$funcs|tr -d ' ')|" \
+				$(filter %.c,$2); \
+		done \
+	fi;
+endef
 
 $(OUTPUT)/%.o: %.c $(wildcard %.h) $(LIBBPF_OBJ) | $(OUTPUT)
 	$(call msg,CC,$@)
+	$(call modified_for_ebd,$@,$^)
 	$(Q)$(CC) $(CFLAGS) $(INCLUDES) -c $(filter %.c,$^) -o $@
+#	$(Q)git checkout -q $(filter %.c,$^) | true
 
 # Build libbpf.a
 $(LIBBPF_OBJ): $(wildcard $(LIBBPF_SRC)/*.[ch]) | $(OUTPUT)/libbpf
 	$(call msg,LIB,$@)
 	$(Q)$(MAKE) -C $(LIBBPF_SRC) BUILD_STATIC_ONLY=1		      \
 			OBJDIR=$(dir $@)/libbpf DESTDIR=$(dir $@)		      \
-			INCLUDEDIR= LIBDIR= UAPIDIR=			      \
+			INCLUDEDIR= LIBDIR= UAPIDIR= NO_PKG_CONFIG=1		  \
 			install
 
 install: $(APPS)
