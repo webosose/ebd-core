@@ -422,6 +422,7 @@ static int dso__add_sym(struct dso *dso, const char *name, uint64_t start,
 	sym->name = (void*)(unsigned long)off;
 	sym->start = start;
 	sym->size = size;
+	sym->offset = 0;
 
 	return 0;
 }
@@ -634,8 +635,10 @@ static struct sym *dso__find_sym(struct dso *dso, uint64_t offset)
 			end = mid - 1;
 	}
 
-	if (start == end && dso->syms[start].start <= offset)
+	if (start == end && dso->syms[start].start <= offset) {
+		(dso->syms[start]).offset = offset - dso->syms[start].start;
 		return &dso->syms[start];
+	}
 	return NULL;
 }
 
@@ -717,6 +720,22 @@ const struct sym *syms__map_addr(const struct syms *syms, unsigned long addr)
 	dso = syms__find_dso(syms, addr, &offset);
 	if (!dso)
 		return NULL;
+	return dso__find_sym(dso, offset);
+}
+
+const struct sym *syms__map_addr_dso(const struct syms *syms, unsigned long addr,
+				     char **dso_name, uint64_t *dso_offset)
+{
+	struct dso *dso;
+	uint64_t offset;
+
+	dso = syms__find_dso(syms, addr, &offset);
+	if (!dso)
+		return NULL;
+
+	*dso_name = dso->name;
+	*dso_offset = offset;
+
 	return dso__find_sym(dso, offset);
 }
 
