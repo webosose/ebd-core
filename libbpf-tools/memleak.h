@@ -4,7 +4,6 @@
 #define MAX_ENTRIES 10248
 #define BPF_MAX_STACK_DEPTH	127
 #define TASK_COMM_LEN		16
-#define BPF_F_USER_STACK	256
 
 #define PAGE_SIZE 4096
 

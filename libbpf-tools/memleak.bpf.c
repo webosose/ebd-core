@@ -7,6 +7,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_core_read.h>
 
+#include "vmlinux_defs.h"
 #include "memleak.h"
 
 const volatile bool kernel_threads_only = false;

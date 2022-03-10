@@ -1,8 +1,6 @@
 #ifndef __LSAN_H
 #define __LSAN_H
 
-#define BPF_F_USER_STACK	256
-
 enum chunk_tag {
 	DIRECTLY_LEAKED = 0,  // default
 	INDIRECTLY_LEAKED = 1,
