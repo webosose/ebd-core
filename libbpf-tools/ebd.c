@@ -14,11 +14,11 @@ const char argp_program_doc[] =
 
 int main(int argc, char *argv[])
 {
-	if (!strcmp(argv[1], "memleak"))
-		memleak_main(argc - 1, argv + 1);
-
 	if (!strcmp(argv[1], "lsan"))
 		lsan_main(argc - 1, argv + 1);
+
+	if (!strcmp(argv[1], "memleak"))
+		memleak_main(argc - 1, argv + 1);
 
 	if (!strcmp(argv[1], "profile"))
 		profile_main(argc - 1, argv + 1);

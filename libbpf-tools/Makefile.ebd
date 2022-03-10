@@ -15,8 +15,8 @@ COMMON_OBJ = \
 	$(OUTPUT)/errno_helpers.o \
 	$(OUTPUT)/map_helpers.o \
 	$(OUTPUT)/uprobe_helpers.o \
-	$(OUTPUT)/memleak.o \
 	$(OUTPUT)/lsan.o \
+	$(OUTPUT)/memleak.o \
 	$(OUTPUT)/profile.o \
 	#
 
@@ -32,17 +32,17 @@ msg = @printf '  %-8s %s%s\n' "$(1)" "$(notdir $(2))" "$(if $(3), $(3))";
 MAKEFLAGS += --no-print-directory
 endif
 
-SKELS = memleak.skel.h lsan.skel.h profile.skel.h
+SKELS = lsan.skel.h memleak.skel.h profile.skel.h
 $(shell mkdir -p $(OUTPUT) && cp -a $(SKELS) $(OUTPUT))
 
-$(shell sed -i -e 's/\ main/\ memleak_main/' memleak.c)
 $(shell sed -i -e 's/\ main/\ lsan_main/' lsan.c)
+$(shell sed -i -e 's/\ main/\ memleak_main/' memleak.c)
 $(shell sed -i -e 's/\ main/\ profile_main/' profile.c)
-$(shell sed -i -e 's/\ argp_program/\ memleak_argp_program/' memleak.c)
 $(shell sed -i -e 's/\ argp_program/\ lsan_argp_program/' lsan.c)
+$(shell sed -i -e 's/\ argp_program/\ memleak_argp_program/' memleak.c)
 $(shell sed -i -e 's/\ argp_program/\ profile_argp_program/' profile.c)
-$(shell sed -i -e 's/*argp_program/*memleak_argp_program/' memleak.c)
 $(shell sed -i -e 's/*argp_program/*lsan_argp_program/' lsan.c)
+$(shell sed -i -e 's/*argp_program/*memleak_argp_program/' memleak.c)
 $(shell sed -i -e 's/*argp_program/*profile_argp_program/' profile.c)
 
 .PHONY: clean
