@@ -20,5 +20,8 @@ int main(int argc, char *argv[])
 	if (!strcmp(argv[1], "lsan"))
 		lsan_main(argc - 1, argv + 1);
 
+	if (!strcmp(argv[1], "profile"))
+		profile_main(argc - 1, argv + 1);
+
 	return 0;
 }
