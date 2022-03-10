@@ -24,8 +24,10 @@
 /hardirqs
 /ksnoop
 /llcstat
+/lsan
 /nfsdist
 /nfsslower
+/memleak
 /mountsnoop
 /numamove
 /offcputime
