@@ -13,6 +13,8 @@
 #include "uthash.h"
 
 #define LSAN_OPTIMIZED
+#define STACK_MAX 127
+#define BUF_MAX (STACK_MAX * LINE_MAX * 2)
 
 enum maps {
 	MAPS_ADDRESS = 0,
@@ -22,6 +24,12 @@ enum maps {
 	MAPS_INODE = 4,
 	MAPS_PATH = 5,
 	MAPS_COLUMN_MAX = 6
+};
+
+enum suppr {
+	SUPPR_KIND = 0,
+	SUPPR_PATH = 1,
+	SUPPR_MAX = 2
 };
 
 static struct env {
@@ -37,7 +45,7 @@ static struct env {
 	.pid = -1,
 	.tid = -1,
 	.stack_storage_size = 1024,
-	.perf_max_stack_depth = 127,
+	.perf_max_stack_depth = STACK_MAX,
 	.duration = 10,
 };
 
@@ -71,6 +79,7 @@ static const struct argp_option opts[] = {
 	{ "pid", 'p', "PID", 0, "Set pid(mandatory option)" },
 	{},
 };
+const char *suppression_path = "/usr/etc/suppr.txt";
 
 typedef void (*for_each_chunk_callback)(uptr chunk);
 
@@ -78,6 +87,7 @@ static const char *libc_path = NULL;
 struct lsan_bpf *obj;
 cvector_vector_type(uptr) frontier = NULL;
 cvector_vector_type(uptr) key_table = NULL;
+cvector_vector_type(char*) suppression = NULL;
 FILE *fp_mem = NULL;
 
 static int libbpf_print_fn(enum libbpf_print_level level,
@@ -681,34 +691,56 @@ static const char* demangle(const char* name)
 	return name;
 }
 
+static void leak_printer(struct report_info_t *curr, unsigned long *ip,
+	const struct syms *syms, const char *kind)
+{
+	const struct sym *sym = NULL;
+	char report_buf[BUF_MAX];
+	char str[LINE_MAX];
+	size_t i, j;
+	memset(report_buf, 0, BUF_MAX);
+	sprintf(report_buf,
+		"%lld bytes %s leak found in %d allocations from stack\n",
+		curr->size * curr->count, kind, curr->count);
+	for (i = 0; i < env.perf_max_stack_depth && ip[i]; ++i) {
+		sprintf(str, "\t#%ld %#016lx", i+1, ip[i]);
+		strcat(report_buf, str);
+		char* dso_name = NULL;
+		uint64_t dso_offset;
+		sym = syms__map_addr_dso(syms, ip[i], &dso_name, &dso_offset);
+		if (sym) {
+			sprintf(str, " %s+%#lx", demangle(sym->name), sym->offset);
+			strcat(report_buf, str);
+		}
+		if (dso_name) {
+			sprintf(str, " (%s+%#lx)", dso_name, dso_offset);
+			strcat(report_buf, str);
+		}
+		if (i == 0 || i == 1) {
+			for (j = 0; j < cvector_size(suppression); ++j) {
+				if (strstr(str, suppression[j]) != NULL) {
+					return;
+				}
+			}
+		}
+		sprintf(str, "\n");
+		strcat(report_buf, str);
+	}
+	printf("%s\n", report_buf);
+}
+
 static void report_leak(struct syms_cache *syms_cache, unsigned long *ip,
 	int sfd, struct report_info_t *container, const char* kind)
 {
 	const struct syms *syms = NULL;
-	const struct sym *sym = NULL;
-	size_t i;
 	struct report_info_t *curr, *next;
+	int rst;
 	HASH_SORT(container, report_info_sort);
 	HASH_ITER(hh, container, curr, next) {
-		int rst = bpf_map_lookup_elem(sfd, &(curr->id), ip);
+		rst = bpf_map_lookup_elem(sfd, &(curr->id), ip);
 		syms = syms_cache__get_syms(syms_cache, env.pid);
 		if (rst == 0 && syms != NULL) {
-			printf("%lld bytes %s leak found in %d allocations from stack\n",
-				curr->size * curr->count, kind, curr->count);
-			for (i = 0; i < env.perf_max_stack_depth && ip[i]; ++i) {
-				printf("\t#%ld %#016lx in", i+1, ip[i]);
-				char* dso_name = NULL;
-				uint64_t dso_offset;
-				sym = syms__map_addr_dso(syms, ip[i], &dso_name, &dso_offset);
-				if (sym) {
-					printf(" %s+%#lx", demangle(sym->name), sym->offset);
-				}
-				if (dso_name) {
-					printf(" (%s+%#lx)", dso_name, dso_offset);
-				}
-				printf("\n");
-			}
-			printf("\n");
+			leak_printer(curr, ip, syms, kind);
 		}
 	}
 }
@@ -722,7 +754,7 @@ static void report_leaks(struct syms_cache *syms_cache)
 	}
 	time_t t = time(NULL);
 	struct tm tm = *localtime(&t);
-	printf("[%04d-%02d-%02d %02d:%02d:%02d] Print leaks:\n",
+	printf("\n[%04d-%02d-%02d %02d:%02d:%02d] Print leaks:\n",
 		tm.tm_year+1900, tm.tm_mon+1, tm.tm_mday,
 		tm.tm_hour, tm.tm_min, tm.tm_sec);
 	int sfd = bpf_map__fd(obj->maps.stack_traces);
@@ -813,12 +845,44 @@ int main(int argc, char **argv)
 		fprintf(stderr, "Failed to open: %s\n", file_name);
 		return -1;
 	}
+	FILE *fp_suppression = fopen(suppression_path, "rt");
+	if (fp_suppression == NULL) {
+		fprintf(stderr, "Failed to open: %s\n", suppression_path);
+	} else {
+		char line[LINE_MAX];
+		while (fgets(line, sizeof(line), fp_suppression) != NULL) {
+			char v[SUPPR_MAX][PATH_MAX] = { {0, }, };
+			int i = 0;
+			char *ptr = strtok(line, ":");
+			while (ptr != NULL) {
+				memcpy(v[i], ptr, strlen(ptr));
+				++i;
+				ptr = strtok(NULL, ":");
+			}
+			if (strcmp(v[SUPPR_KIND], "leak") == 0) {
+				char* str = (char*)malloc(sizeof(char)*(strlen(v[SUPPR_PATH]) + 1));
+				memset(str, 0, strlen(v[SUPPR_PATH]) + 1);
+				strncpy(str, v[SUPPR_PATH], strlen(v[SUPPR_PATH]));
+				str[strlen(v[SUPPR_PATH])] = '\0';
+				if (strlen(v[SUPPR_PATH]) - 1 >= 0 &&
+						str[strlen(v[SUPPR_PATH]) - 1] == '\n') {
+					str[strlen(v[SUPPR_PATH]) - 1] = '\0';
+				}
+				cvector_push_back(suppression, str);
+			}
+		}
+	}
 	do {
 		sleep(env.duration);
 		empty_table();
 	} while (do_leak_check(syms_cache) == 0);
 
 	// cleanup
+	int i;
+	for (i = 0; i < cvector_size(suppression); ++i) {
+		free(suppression[i]);
+	}
+	cvector_free(suppression);
 	fclose(fp_mem);
 	syms_cache__free(syms_cache);
 	cvector_free(frontier);
