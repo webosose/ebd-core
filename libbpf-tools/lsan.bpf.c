@@ -5,8 +5,6 @@
 #include "vmlinux_defs.h"
 #include "lsan.h"
 
-#define MAX_ENTRIES	10248
-
 const volatile bool kernel_threads_only = false;
 const volatile bool user_threads_only = false;
 const volatile pid_t targ_tgid = -1;
@@ -35,6 +33,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_STACK_TRACE);
+	__uint(max_entries, MAX_ENTRIES);
 	__uint(key_size, sizeof(u32));
 } stack_traces SEC(".maps");
 

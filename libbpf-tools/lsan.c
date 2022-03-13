@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <time.h>
 #include <string.h>
+#include <sys/uio.h>
 #include <bpf/libbpf.h>
 #include <bpf/bpf.h>
 #include "lsan.h"
@@ -12,9 +13,11 @@
 #include "cvector.h"
 #include "uthash.h"
 
+//#define USE_PROCESS_VM_READV
 #define LSAN_OPTIMIZED
 #define STACK_MAX 127
 #define BUF_MAX (STACK_MAX * LINE_MAX * 2)
+#define DURATION_S 10
 
 enum maps {
 	MAPS_ADDRESS = 0,
@@ -44,9 +47,9 @@ static struct env {
 } env = {
 	.pid = -1,
 	.tid = -1,
-	.stack_storage_size = 1024,
+	.stack_storage_size = MAX_ENTRIES,
 	.perf_max_stack_depth = STACK_MAX,
-	.duration = 10,
+	.duration = DURATION_S,
 };
 
 typedef unsigned long long uptr;
@@ -390,6 +393,15 @@ static uptr get_reference(uptr pp, size_t size)
 {
 	char *buf = (char*)malloc(sizeof(char) * size);
 	uptr rst = 0;
+#ifdef USE_PROCESS_VM_READV
+	struct iovec local;
+	struct iovec remote;
+	local.iov_base = buf;
+	local.iov_len = size;
+	remote.iov_base = (void*)pp;
+	remote.iov_len = size;
+	process_vm_readv(env.pid, &local, 1, &remote, 1, 0);
+#else
 	fseek(fp_mem, pp, SEEK_SET);
 	size_t sz = fread(buf, sizeof(char), size, fp_mem);
 	if (size != sz) {
@@ -398,6 +410,7 @@ static uptr get_reference(uptr pp, size_t size)
 		return rst;
 	}
 	int i;
+#endif
 	for (i=0; i<size; ++i) {
 #if LITTLE_ENDIAN
 		rst += ((uptr)buf[i] << (i*size));
@@ -473,17 +486,10 @@ static void scan_range_for_pointers(uptr begin, uptr end, enum chunk_tag tag)
 
 		if (val->tag == REACHABLE || val->tag == IGNORED)
 			continue;
-
-		struct lsan_hash_t *item = (struct lsan_hash_t*)malloc(
-			sizeof(struct lsan_hash_t));
-		item->size = val->size;
-		item->stack_id = val->stack_id;
-		item->tag = tag;
-		item->id = val->id;
-		HASH_REPLACE(hh, copied, id, sizeof(uptr), item, val);
-		free(val);
-		if (tag == REACHABLE)
+		val->tag = tag;
+		if (tag == REACHABLE) {
 			cvector_push_back(frontier, p);
+		}
 	}
 }
 
@@ -568,21 +574,19 @@ static int read_table()
 	unsigned long lookup_key, next_key;
 	int err;
 	int afd = bpf_map__fd(obj->maps.allocs);
-	lookup_key = 0;
+	lookup_key = -1;
 	while (!bpf_map_get_next_key(afd, &lookup_key, &next_key)) {
 		err = bpf_map_lookup_elem(afd, &next_key, &val);
 		if (err < 0) {
-			return 0;
+			return err;
 		}
-		if (val.stack_id >= 0) {
-			struct lsan_hash_t *item = (struct lsan_hash_t*)malloc(
-				sizeof(struct lsan_hash_t));
-			item->size = val.size;
-			item->stack_id = val.stack_id;
-			item->tag = val.tag;
-			item->id = next_key;
-			HASH_ADD(hh, copied, id, sizeof(uptr), item);
-		}
+		struct lsan_hash_t *item = (struct lsan_hash_t*)malloc(
+			sizeof(struct lsan_hash_t));
+		item->size = val.size;
+		item->stack_id = val.stack_id;
+		item->tag = val.tag;
+		item->id = next_key;
+		HASH_ADD(hh, copied, id, sizeof(uptr), item);
 		cvector_push_back(key_table, next_key);
 		lookup_key = next_key;
 	}
@@ -642,7 +646,7 @@ static void process_root_regions()
 static void flood_fill_tag(enum chunk_tag tag)
 {
 	while (!cvector_empty(frontier)) {
-		uptr next_chunk = frontier[cvector_size(frontier)];
+		uptr next_chunk = frontier[cvector_size(frontier) - 1];
 		cvector_pop_back(frontier);
 		uptr origin = points_into_chunk(next_chunk);
 		struct lsan_hash_t *val;
@@ -737,6 +741,11 @@ static void report_leak(struct syms_cache *syms_cache, unsigned long *ip,
 	int rst;
 	HASH_SORT(container, report_info_sort);
 	HASH_ITER(hh, container, curr, next) {
+		if (curr->id < 0) {
+			printf("%lld bytes %s leak found in %d allocations from unknown stack\n",
+				curr->size * curr->count, kind, curr->count);
+			continue;
+		}
 		rst = bpf_map_lookup_elem(sfd, &(curr->id), ip);
 		syms = syms_cache__get_syms(syms_cache, env.pid);
 		if (rst == 0 && syms != NULL) {

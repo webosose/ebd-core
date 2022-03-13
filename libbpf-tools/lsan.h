@@ -1,6 +1,8 @@
 #ifndef __LSAN_H
 #define __LSAN_H
 
+#define MAX_ENTRIES	65536
+
 enum chunk_tag {
 	DIRECTLY_LEAKED = 0,  // default
 	INDIRECTLY_LEAKED = 1,
