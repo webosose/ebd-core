@@ -668,9 +668,17 @@ static void classify_all_chunks()
 }
 
 // Decending order
-int report_info_sort(struct report_info_t *a, struct report_info_t *b)
+static int report_info_sort(struct report_info_t *a, struct report_info_t *b)
 {
 	return b->size * b->count - a->size * a->count;
+}
+
+static const char* demangle(const char* name)
+{
+	// TODO
+	// return demangled function name
+	// return name if it's not mangled
+	return name;
 }
 
 static void report_leak(struct syms_cache *syms_cache, unsigned long *ip,
@@ -685,15 +693,20 @@ static void report_leak(struct syms_cache *syms_cache, unsigned long *ip,
 		int rst = bpf_map_lookup_elem(sfd, &(curr->id), ip);
 		syms = syms_cache__get_syms(syms_cache, env.pid);
 		if (rst == 0 && syms != NULL) {
-			printf("Total %lld bytes %s leaks on %d allocations\n",
+			printf("%lld bytes %s leak found in %d allocations from stack\n",
 				curr->size * curr->count, kind, curr->count);
-			for (i=0; i<env.perf_max_stack_depth && ip[i]; ++i) {
-				sym = syms__map_addr(syms, ip[i]);
+			for (i = 0; i < env.perf_max_stack_depth && ip[i]; ++i) {
+				printf("\t#%ld %#016lx in", i+1, ip[i]);
+				char* dso_name = NULL;
+				uint64_t dso_offset;
+				sym = syms__map_addr_dso(syms, ip[i], &dso_name, &dso_offset);
 				if (sym) {
-					printf("\t%#016lx %s\n", ip[i], sym->name);
-				} else {
-					printf("\t%#016lx [unknown]\n", ip[i]);
+					printf(" %s+%#lx", demangle(sym->name), sym->offset);
 				}
+				if (dso_name) {
+					printf(" (%s+%#lx)", dso_name, dso_offset);
+				}
+				printf("\n");
 			}
 			printf("\n");
 		}
@@ -707,7 +720,11 @@ static void report_leaks(struct syms_cache *syms_cache)
 		fprintf(stderr, "Failed to alloc ip\n");
 		return;
 	}
-	printf("\nStart reporting\n");
+	time_t t = time(NULL);
+	struct tm tm = *localtime(&t);
+	printf("[%04d-%02d-%02d %02d:%02d:%02d] Print leaks:\n",
+		tm.tm_year+1900, tm.tm_mon+1, tm.tm_mday,
+		tm.tm_hour, tm.tm_min, tm.tm_sec);
 	int sfd = bpf_map__fd(obj->maps.stack_traces);
 	report_leak(syms_cache, ip, sfd, direct, "direct");
 	report_leak(syms_cache, ip, sfd, indirect, "indirect");
