@@ -14,8 +14,6 @@ const volatile bool include_idle = false;
 const volatile pid_t targ_pid = -1;
 const volatile pid_t targ_tid = -1;
 
-extern int LINUX_KERNEL_VERSION __kconfig;
-
 struct {
 	__uint(type, BPF_MAP_TYPE_STACK_TRACE);
 	__uint(key_size, sizeof(u32));
@@ -63,25 +61,8 @@ int do_perf_event(struct bpf_perf_event_data *ctx) {
 
 		// arm64 only supported
 #ifdef __TARGET_ARCH_arm64
-		extern __u32 CONFIG_ARM64_VA_BITS __kconfig __weak;
-		extern bool CONFIG_ARM64_64K_PAGES __kconfig __weak;
 		u64 ip = PT_REGS_IP(&ctx->regs);
-		u64 page_offset;
-		u32 va;
-
-		if (CONFIG_ARM64_VA_BITS)
-			va = CONFIG_ARM64_VA_BITS;
-		else if (CONFIG_ARM64_64K_PAGES)
-			va = 42;
-		else
-			va = 39;
-
-		if (LINUX_KERNEL_VERSION >= KERNEL_VERSION(5, 4, 0))
-			page_offset = (-(1UL << (va)));
-		else
-			page_offset = (0xffffffffffffffffUL - (1UL << (va - 1)) + 1);
-
-		if (ip > page_offset) {
+		if (ip > 0xff00000000000000) {
 			key.kernel_ip = ip;
 		}
 #endif
