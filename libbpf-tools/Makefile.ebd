@@ -32,7 +32,11 @@ msg = @printf '  %-8s %s%s\n' "$(1)" "$(notdir $(2))" "$(if $(3), $(3))";
 MAKEFLAGS += --no-print-directory
 endif
 
-SKELS = lsan.skel.h memleak.skel.h profile.skel.h
+SKELS = \
+	${APPS}/lsan.skel.h \
+	${APPS}/memleak.skel.h \
+	${APPS}/profile.skel.h
+
 $(shell mkdir -p $(OUTPUT) && cp -a $(SKELS) $(OUTPUT))
 
 $(shell sed -i -e 's/\ main/\ lsan_main/' lsan.c)
@@ -48,7 +52,7 @@ $(shell sed -i -e 's/*argp_program/*profile_argp_program/' profile.c)
 .PHONY: clean
 clean:
 	$(call msg,CLEAN)
-	$(Q)rm -rf $(OUTPUT) $(APPS)
+	$(Q)rm -rf $(OUTPUT)
 
 $(OUTPUT) $(OUTPUT)/libbpf:
 	$(call msg,MKDIR,$@)
