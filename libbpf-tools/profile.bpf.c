@@ -26,8 +26,30 @@ struct {
 	__uint(max_entries, MAX_ENTRIES);
 } counts SEC(".maps");
 
+/*
+ * If PAGE_OFFSET macro is not available in vmlinux.h, determine ip whose MSB
+ * (Most Significant Bit) is 1 as the kernel address.
+ * TODO: use end address of user space to determine the address space of ip
+ */
+#if defined(__TARGET_ARCH_arm64) || defined(__TARGET_ARCH_x86)
+#define BITS_PER_ADDR	(64)
+#define MSB_SET_ULONG	(1UL << (BITS_PER_ADDR - 1))
+static __always_inline
+bool is_kernel_addr(u64 addr)
+{
+	return !!(addr & MSB_SET_ULONG);
+}
+#else
+static __always_inline
+bool is_kernel_addr(u64 addr)
+{
+	return false;
+}
+#endif /* __TARGET_ARCH_arm64 || __TARGET_ARCH_x86 */
+
 SEC("perf_event")
-int do_perf_event(struct bpf_perf_event_data *ctx) {
+int do_perf_event(struct bpf_perf_event_data *ctx)
+{
 	u64 id = bpf_get_current_pid_tgid();
 	u32 pid = id >> 32;
 	u32 tid = id;
@@ -58,14 +80,11 @@ int do_perf_event(struct bpf_perf_event_data *ctx) {
 
 	if (key.kern_stack_id >= 0) {
 		// populate extras to fix the kernel stack
-
-		// arm64 only supported
-#ifdef __TARGET_ARCH_arm64
 		u64 ip = PT_REGS_IP(&ctx->regs);
-		if (ip > 0xff00000000000000) {
-			key.kernel_ip = ip;
+
+		if (is_kernel_addr(ip)) {
+		    key.kernel_ip = ip;
 		}
-#endif
 	}
 
 	valp = bpf_map_lookup_or_try_init(&counts, &key, &zero);
