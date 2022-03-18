@@ -289,7 +289,7 @@ static void print_map(struct ksyms *ksyms, struct syms_cache *syms_cache,
 	bool has_collision = false;
 	unsigned int missing_stacks = 0;
 	struct key_ext_t counts[MAX_ENTRIES];
-	int nr_kern_elem = 0;
+	int idx = 0;
 
 	ip = calloc(env.perf_max_stack_depth, sizeof(*ip));
 	if (!ip) {
@@ -333,7 +333,10 @@ static void print_map(struct ksyms *ksyms, struct syms_cache *syms_cache,
 					if (!syms) {
 						fprintf(stderr, "failed to get syms\n");
 					} else {
-						for (j = 0; j < env.perf_max_stack_depth && ip[j]; j++) {
+						j = 0;
+						while (ip[j] && j < env.perf_max_stack_depth)
+							j++;
+						for (--j; j >= 0; j--) {
 							sym = syms__map_addr(syms, ip[j]);
 							printf(";%s", sym ? sym->name : "[unknown]");
 						}
@@ -348,7 +351,10 @@ static void print_map(struct ksyms *ksyms, struct syms_cache *syms_cache,
 					printf(";[Missed Kernel Stack]");
 				else if (k->kern_stack_id >= 0 &&
 					 bpf_map_lookup_elem(sfd, &k->kern_stack_id, ip) == 0) {
-					for (j = 0; j < env.perf_max_stack_depth && ip[j]; j++) {
+					j = 0;
+					while (ip[j] && j < env.perf_max_stack_depth)
+						j++;
+					for (--j; j >= 0; j--) {
 						ksym = ksyms__map_addr(ksyms, ip[j]);
 						printf(";%s", ksym ? ksym->name : "[unknown]");
 					}
@@ -361,29 +367,26 @@ static void print_map(struct ksyms *ksyms, struct syms_cache *syms_cache,
 			printf(" %lld\n", v);
 		} else {
 			// print default multi-line stack output
-			nr_kern_elem = 0;
+			idx = 0;
 
 			if (!env.user_stacks_only) {
 				if (stack_id_err(k->kern_stack_id))
 					printf("    [Missed Kernel Stack]\n");
 				else if (k->kern_stack_id >= 0 &&
 					 bpf_map_lookup_elem(sfd, &k->kern_stack_id, ip) == 0) {
-					for (j = 0; j < env.perf_max_stack_depth && ip[j]; j++) {
-						ksym = ksyms__map_addr(ksyms, ip[j]);
-						if (ksym)
-							printf("    #%-2d 0x%lx %s+0x%lx\n", j, ip[j], ksym->name, ip[j] - ksym->addr);
-						else
-							printf("    #%-2d 0x%lx [unknown]\n", j, ip[j]);
-					}
-					nr_kern_elem = j;
-
 					if (k->kernel_ip) {
 						ksym = ksyms__map_addr(ksyms, k->kernel_ip);
 						if (ksym)
-							printf("    #%-2d 0x%llx %s+0x%llx\n", j, k->kernel_ip, ksym->name, k->kernel_ip - ksym->addr);
+							printf("    #%-2d 0x%llx %s+0x%llx\n", idx++, k->kernel_ip, ksym->name, k->kernel_ip - ksym->addr);
 						else
-							printf("    #%-2d 0x%llx [unknown]\n", j, k->kernel_ip);
-						nr_kern_elem++;
+							printf("    #%-2d 0x%llx [unknown]\n", idx++, k->kernel_ip);
+					}
+					for (j = 0; j < env.perf_max_stack_depth && ip[j]; j++) {
+						ksym = ksyms__map_addr(ksyms, ip[j]);
+						if (ksym)
+							printf("    #%-2d 0x%lx %s+0x%lx\n", idx++, ip[j], ksym->name, ip[j] - ksym->addr);
+						else
+							printf("    #%-2d 0x%lx [unknown]\n", idx++, ip[j]);
 					}
 				}
 			}
@@ -399,14 +402,14 @@ static void print_map(struct ksyms *ksyms, struct syms_cache *syms_cache,
 					syms = syms_cache__get_syms(syms_cache, k->pid);
 					if (!syms) {
 						for (j = 0; j < env.perf_max_stack_depth && ip[j]; j++)
-							printf("    #%-2d 0x%016lx [unknown]\n", j + nr_kern_elem, ip[j]);
+							printf("    #%-2d 0x%016lx [unknown]\n", idx++, ip[j]);
 					} else {
 						for (j = 0; j < env.perf_max_stack_depth && ip[j]; j++) {
 							char *dso_name;
 							uint64_t dso_offset;
 							sym = syms__map_addr_dso(syms, ip[j], &dso_name, &dso_offset);
 
-							printf("    #%-2d 0x%016lx", j + nr_kern_elem, ip[j]);
+							printf("    #%-2d 0x%016lx", idx++, ip[j]);
 							if (sym)
 								printf(" %s+0x%lx", sym->name, sym->offset);
 							if (dso_name)
