@@ -28,7 +28,7 @@ static struct env {
 } env = {
 	.pid = -1,
 	.tid = -1,
-	.stack_storage_size = 1024,
+	.stack_storage_size = 10248,
 	.perf_max_stack_depth = 127,
 	.duration = 5,
 };
@@ -502,7 +502,7 @@ int main(int argc, char **argv)
 	obj->rodata->kernel_threads_only = env.kernel_threads_only;
 
 	bpf_map__set_value_size(obj->maps.stack_traces,
-			env.perf_max_stack_depth * sizeof(unsigned long));
+			env.perf_max_stack_depth * sizeof(unsigned long long));
 	bpf_map__set_max_entries(obj->maps.stack_traces, env.stack_storage_size);
 
 	err = memleak_bpf__load(obj);
