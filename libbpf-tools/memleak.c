@@ -158,11 +158,17 @@ skip_ustack:
 	rows = rows < top_stacks ? rows : top_stacks;
 
 	if (env.kernel_threads_only || !target_pid) {
-		for (j = 0; j < rows; j++) {
-			printf("\t%lld bytes in %d allocations from stack\n", stack_ips[j].size, 1);
-			for (i = 0; i < env.perf_max_stack_depth && stack_ips[j].ip[i]; i++) {
-				ksym = ksyms__map_addr(ksyms, stack_ips[j].ip[i]);
-				printf("    %#lx %s\n", ksym->addr, ksym ? ksym->name : "Unknown");
+		for (i = 0; i < rows; i++) {
+			printf("\t%lld bytes in %d allocations from stack\n", stack_ips[i].size, 1);
+			for (j = 0; j < env.perf_max_stack_depth && stack_ips[i].ip[j]; j++) {
+				ksym = ksyms__map_addr(ksyms, stack_ips[i].ip[j]);
+				if (ksym) {
+					ptrdiff_t diff = stack_ips[i].ip[j] - ksym->addr;
+					printf("\t#%-2d 0x%lx %s+0x%lx\n", j + 1,
+						stack_ips[i].ip[j], ksym->name, diff);
+				} else
+					printf("\t#%-2d 0x%lx [unknown]\n", j + 1,
+						stack_ips[i].ip[j]);
 			}
 			printf("\n");
 		}
@@ -170,19 +176,24 @@ skip_ustack:
 	}
 
 	syms = syms_cache__get_syms(syms_cache, val.pid);
-	if (!syms) {
-		warn("failed to get syms\n");
-		goto skip_ustack;
-	}
 
-	for (j = 0; j < rows; j++) {
-		printf("\t%lld bytes in %d allocations from user stack\n", stack_ips[j].size, 1);
-		for (i = 0; i < env.perf_max_stack_depth && stack_ips[j].ip[i]; i++) {
-			sym = syms__map_addr(syms, stack_ips[j].ip[i]);
-			if (sym)
-				printf("    %#016lx %s\n", stack_ips[j].ip[i], sym->name);
-			else
-				printf("    %#016lx [unknown]\n", stack_ips[j].ip[i]);
+	for (i = 0; i < rows; i++) {
+		printf("\t%lld bytes in %d allocations from user stack\n", stack_ips[i].size, 1);
+		for (j = 0; j < env.perf_max_stack_depth && stack_ips[i].ip[j]; j++) {
+			if (!syms)
+				printf("\t#%-2d 0x%016lx [unknown]\n", j + 1, stack_ips[i].ip[j]);
+			else {
+				char *dso_name = NULL;
+				uint64_t dso_offset = 0;
+				sym = syms__map_addr_dso(syms, stack_ips[i].ip[j],
+						   &dso_name, &dso_offset);
+				printf("\t#%-2d %#016lx", j + 1, stack_ips[i].ip[j]);
+				if (sym)
+					printf(" %s+0x%lx", sym->name, sym->offset);
+				if (dso_name)
+					printf(" (%s_0x%lx)", dso_name, dso_offset);
+				printf("\n");
+			}
 		}
 		printf("    %-16s %s (%d)\n\n", "-", val.comm, val.pid);
 	}
