@@ -78,6 +78,7 @@ int do_perf_event(struct bpf_perf_event_data *ctx)
 	else
 		key.user_stack_id = bpf_get_stackid(&ctx->regs, &stackmap, BPF_F_USER_STACK);
 
+#ifdef KERNEL_IP
 	if (key.kern_stack_id >= 0) {
 		// populate extras to fix the kernel stack
 		u64 ip = PT_REGS_IP(&ctx->regs);
@@ -86,6 +87,7 @@ int do_perf_event(struct bpf_perf_event_data *ctx)
 		    key.kernel_ip = ip;
 		}
 	}
+#endif
 
 	valp = bpf_map_lookup_or_try_init(&counts, &key, &zero);
 	if (valp)
