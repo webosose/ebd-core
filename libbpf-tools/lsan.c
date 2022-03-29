@@ -400,17 +400,21 @@ static uptr get_reference(uptr pp, size_t size)
 	local.iov_len = size;
 	remote.iov_base = (void*)pp;
 	remote.iov_len = size;
-	process_vm_readv(env.pid, &local, 1, &remote, 1, 0);
+	size_t sz = process_vm_readv(env.pid, &local, 1, &remote, 1, 0);
 #else
 	fseek(fp_mem, pp, SEEK_SET);
 	size_t sz = fread(buf, sizeof(char), size, fp_mem);
+#endif
 	if (size != sz) {
-		fprintf(stderr, "Tried to read %ld bytes but only read %ld bytes\n",
-			size, sz);
+		//fprintf(stderr, "Tried to read %ld bytes but only read %ld bytes\n",
+		//	size, sz);
+		if (getpgid(env.pid) < 0) {
+			fprintf(stderr, "Is this process alive? pid: %d\n", env.pid);
+			exit(0);
+		}
 		return rst;
 	}
 	int i;
-#endif
 	for (i=0; i<size; ++i) {
 #if LITTLE_ENDIAN
 		rst += ((uptr)buf[i] << (i*size));
@@ -742,7 +746,7 @@ static void report_leak(struct syms_cache *syms_cache, unsigned long *ip,
 	HASH_SORT(container, report_info_sort);
 	HASH_ITER(hh, container, curr, next) {
 		if (curr->id < 0) {
-			printf("%lld bytes %s leak found in %d allocations from unknown stack\n",
+			printf("%lld bytes %s leak found in %d allocations from unknown stack\n\n",
 				curr->size * curr->count, kind, curr->count);
 			continue;
 		}
@@ -883,6 +887,10 @@ int main(int argc, char **argv)
 	}
 	do {
 		sleep(env.duration);
+		if (getpgid(env.pid) < 0) {
+			fprintf(stderr, "Is this process alive? pid: %d\n", env.pid);
+			exit(0);
+		}
 		empty_table();
 	} while (do_leak_check(syms_cache) == 0);
 
