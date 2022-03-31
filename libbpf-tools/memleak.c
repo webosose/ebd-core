@@ -46,10 +46,17 @@ const char argp_program_doc[] =
 "allocations made with kmalloc/kmem_cache_alloc/get_free_pages and\n"
 "corresponding memory release functions.\n";
 
+#define OPT_PERF_MAX_STACK_DEPTH	1 /* --pef-max-stack-depth */
+#define OPT_STACK_STORAGE_SIZE		2 /* --stack-storage-size */
+
 static const struct argp_option opts[] = {
 	{ "pid", 'p', "PID", 0, "Process ID to trace"},
 	{ "kernel-thread-olny", 'k', NULL, 0,
 	  "Kernel threads only (no user threads)" },
+	{ "perf-max-stack-depth", OPT_PERF_MAX_STACK_DEPTH,
+	  "PERF-MAX-STACK-DEPTH", 0, "the limit for both kernel and user stack traces (default 127)" },
+	{ "stack-storage-size", OPT_STACK_STORAGE_SIZE, "STACK-STORAGE-SIZE", 0,
+	  "the number of unique stack traces that can be stored and displayed (default 1024)" },
 	{ "top", 'T', "count", 0,
 	  "display only this many top allocating stacks (by size)" },
 	{ "verbose", 'v', NULL, 0, "Verbose debug output" },
@@ -94,6 +101,22 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 		break;
 	case 'k':
 		env.kernel_threads_only = true;
+		break;
+	case OPT_PERF_MAX_STACK_DEPTH:
+		errno = 0;
+		env.perf_max_stack_depth = strtol(arg, NULL, 10);
+		if (errno) {
+			fprintf(stderr, "invalid perf max stack depth: %s\n", arg);
+			argp_usage(state);
+		}
+		break;
+	case OPT_STACK_STORAGE_SIZE:
+		errno = 0;
+		env.stack_storage_size = strtol(arg, NULL, 10);
+		if (errno) {
+			fprintf(stderr, "invalid stack storage size: %s\n", arg);
+			argp_usage(state);
+		}
 		break;
 	default:
 		return ARGP_ERR_UNKNOWN;
