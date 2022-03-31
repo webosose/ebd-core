@@ -28,8 +28,8 @@ static struct env {
 } env = {
 	.pid = -1,
 	.tid = -1,
-	.stack_storage_size = 10248,
-	.perf_max_stack_depth = 127,
+	.stack_storage_size = 1024,
+	.perf_max_stack_depth = BPF_MAX_STACK_DEPTH,
 	.duration = 5,
 };
 
@@ -51,7 +51,7 @@ const char argp_program_doc[] =
 
 static const struct argp_option opts[] = {
 	{ "pid", 'p', "PID", 0, "Process ID to trace"},
-	{ "kernel-thread-olny", 'k', NULL, 0,
+	{ "kernel-threads-only", 'k', NULL, 0,
 	  "Kernel threads only (no user threads)" },
 	{ "perf-max-stack-depth", OPT_PERF_MAX_STACK_DEPTH,
 	  "PERF-MAX-STACK-DEPTH", 0, "the limit for both kernel and user stack traces (default 127)" },
