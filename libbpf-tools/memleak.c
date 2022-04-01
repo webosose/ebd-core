@@ -14,7 +14,31 @@
 #include "trace_helpers.h"
 #include "uprobe_helpers.h"
 
-#define warn(...) fprintf(stderr, __VA_ARGS__)
+enum log_level {
+	DEBUG,
+	WARN,
+	ERROR,
+};
+
+static enum log_level log_level = ERROR;
+
+static void __p(enum log_level level, char *level_str, char *fmt, ...)
+{
+	va_list ap;
+
+	if (level < log_level)
+		return;
+	va_start(ap, fmt);
+	fprintf(stderr, "%s: ", level_str);
+	vfprintf(stderr, fmt, ap);
+	fprintf(stderr, "\n");
+	va_end(ap);
+	fflush(stderr);
+}
+
+#define p_err(fmt, ...) __p(ERROR, "Error", fmt, ##__VA_ARGS__)
+#define p_warn(fmt, ...) __p(WARN, "Warn", fmt, ##__VA_ARGS__)
+#define p_debug(fmt, ...) __p(DEBUG, "Debug", fmt, ##__VA_ARGS__)
 
 static struct env {
 	pid_t pid;
@@ -90,7 +114,7 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 		errno = 0;
 		pid = strtol(arg, NULL, 10);
 		if (errno || pid <= 0) {
-			warn("Invalid PID: %s\n", arg);
+			p_err("Invalid PID: %s", arg);
 			argp_usage(state);
 		}
 		target_pid = pid;
@@ -108,7 +132,7 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 		errno = 0;
 		env.perf_max_stack_depth = strtol(arg, NULL, 10);
 		if (errno) {
-			fprintf(stderr, "invalid perf max stack depth: %s\n", arg);
+			p_err("invalid perf max stack depth: %s", arg);
 			argp_usage(state);
 		}
 		break;
@@ -116,7 +140,7 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 		errno = 0;
 		env.stack_storage_size = strtol(arg, NULL, 10);
 		if (errno) {
-			fprintf(stderr, "invalid stack storage size: %s\n", arg);
+			p_err("invalid stack storage size: %s", arg);
 			argp_usage(state);
 		}
 		break;
@@ -158,7 +182,7 @@ static void print_outstanding(struct ksyms *ksyms, struct syms_cache *syms_cache
 	while (!bpf_map_get_next_key(ifd, &lookup_key, &next_key)) {
 		err = bpf_map_lookup_elem(ifd, &next_key, &val);
 		if (err < 0) {
-			warn("failed to lookup info: %d\n", err);
+			p_warn("no entry found!");
 			return;
 		}
 		lookup_key = next_key;
@@ -262,7 +286,7 @@ static int attach_kprobes(struct memleak_bpf *obj)
 		bpf_program__attach(obj->progs.tracepoint__kmem__kmalloc);
 	err = libbpf_get_error(obj->links.tracepoint__kmem__kmalloc);
 	if (err) {
-		warn("failed to attach tracepoint: %s\n", strerror(-err));
+		p_warn("failed to attach tracepoint: %s", strerror(-err));
 		return -1;
 	}
 
@@ -270,7 +294,7 @@ static int attach_kprobes(struct memleak_bpf *obj)
 		bpf_program__attach(obj->progs.tracepoint__kmem__kmalloc_node);
 	err = libbpf_get_error(obj->links.tracepoint__kmem__kmalloc_node);
 	if (err) {
-		warn("failed to attach tracepoint: %s\n", strerror(-err));
+		p_warn("failed to attach tracepoint: %s", strerror(-err));
 		return -1;
 	}
 
@@ -278,7 +302,7 @@ static int attach_kprobes(struct memleak_bpf *obj)
 		bpf_program__attach(obj->progs.tracepoint__kmem__kfree);
 	err = libbpf_get_error(obj->links.tracepoint__kmem__kfree);
 	if (err) {
-		warn("failed to attach tracepoint: %s\n", strerror(-err));
+		p_warn("failed to attach tracepoint: %s", strerror(-err));
 		return -1;
 	}
 
@@ -295,13 +319,13 @@ static int attach_uprobes(struct memleak_bpf *obj)
 
 	err = get_libc_path(libc_path);
 	if (err) {
-		warn("could not find libc.so\n");
+		p_warn("could not find libc.so");
 		return -1;
 	}
 
 	func_off = get_elf_func_offset(libc_path, "malloc");
 	if (func_off < 0) {
-		warn("could not find malloc in %s\n", libc_path);
+		p_warn("could not find malloc in %s", libc_path);
 		return -1;
 	}
 	obj->links.malloc_entry =
@@ -309,7 +333,7 @@ static int attach_uprobes(struct memleak_bpf *obj)
 					target_pid ? : -1, libc_path, func_off);
 	err = libbpf_get_error(obj->links.malloc_entry);
 	if (err) {
-		warn("failed to attach malloc_entry: %d\n", err);
+		p_warn("failed to attach malloc_entry: %d", err);
 		return -1;
 	}
 	obj->links.malloc_return =
@@ -317,13 +341,13 @@ static int attach_uprobes(struct memleak_bpf *obj)
 					target_pid ? : -1, libc_path, func_off);
 	err = libbpf_get_error(obj->links.malloc_return);
 	if (err) {
-		warn("failed to attach malloc_return: %d\n", err);
+		p_warn("failed to attach malloc_return: %d", err);
 		return -1;
 	}
 
 	func_off = get_elf_func_offset(libc_path, "free");
 	if (func_off < 0) {
-		warn("could not find free in %s\n", libc_path);
+		p_warn("could not find free in %s", libc_path);
 		return -1;
 	}
 	obj->links.free_entry =
@@ -331,13 +355,13 @@ static int attach_uprobes(struct memleak_bpf *obj)
 					target_pid ? : -1, libc_path, func_off);
 	err = libbpf_get_error(obj->links.free_entry);
 	if (err) {
-		warn("failed to attach free_entry: %d\n", err);
+		p_warn("failed to attach free_entry: %d", err);
 		return -1;
 	}
 
 	func_off = get_elf_func_offset(libc_path, "calloc");
 	if (func_off < 0) {
-		warn("could not find calloc in %s\n", libc_path);
+		p_warn("could not find calloc in %s", libc_path);
 		return -1;
 	}
 	obj->links.calloc_entry =
@@ -345,7 +369,7 @@ static int attach_uprobes(struct memleak_bpf *obj)
 					target_pid ? : -1, libc_path, func_off);
 	err = libbpf_get_error(obj->links.calloc_entry);
 	if (err) {
-		warn("failed to attach calloc_entry: %d\n", err);
+		p_warn("failed to attach calloc_entry: %d", err);
 		return -1;
 	}
 	obj->links.calloc_return =
@@ -353,13 +377,13 @@ static int attach_uprobes(struct memleak_bpf *obj)
 					target_pid ? : -1, libc_path, func_off);
 	err = libbpf_get_error(obj->links.calloc_return);
 	if (err) {
-		warn("failed to attach calloc_return: %d\n", err);
+		p_warn("failed to attach calloc_return: %d", err);
 		return -1;
 	}
 
 	func_off = get_elf_func_offset(libc_path, "realloc");
 	if (func_off < 0) {
-		warn("could not find realloc in %s\n", libc_path);
+		p_warn("could not find realloc in %s", libc_path);
 		return -1;
 	}
 	obj->links.realloc_entry =
@@ -367,7 +391,7 @@ static int attach_uprobes(struct memleak_bpf *obj)
 					target_pid ? : -1, libc_path, func_off);
 	err = libbpf_get_error(obj->links.realloc_entry);
 	if (err) {
-		warn("failed to attach realloc_entry: %d\n", err);
+		p_warn("failed to attach realloc_entry: %d", err);
 		return -1;
 	}
 	obj->links.realloc_return =
@@ -375,13 +399,13 @@ static int attach_uprobes(struct memleak_bpf *obj)
 					target_pid ? : -1, libc_path, func_off);
 	err = libbpf_get_error(obj->links.realloc_return);
 	if (err) {
-		warn("failed to attach realloc_return: %d\n", err);
+		p_warn("failed to attach realloc_return: %d", err);
 		return -1;
 	}
 
 	func_off = get_elf_func_offset(libc_path, "posix_memalign");
 	if (func_off < 0) {
-		warn("could not find posix_memalign in %s\n", libc_path);
+		p_warn("could not find posix_memalign in %s", libc_path);
 		return -1;
 	}
 	obj->links.posix_memalign_entry =
@@ -389,7 +413,7 @@ static int attach_uprobes(struct memleak_bpf *obj)
 					target_pid ? : -1, libc_path, func_off);
 	err = libbpf_get_error(obj->links.posix_memalign_entry);
 	if (err) {
-		warn("failed to attach posix_memalign_entry: %d\n", err);
+		p_warn("failed to attach posix_memalign_entry: %d", err);
 		return -1;
 	}
 	obj->links.posix_memalign_return =
@@ -397,13 +421,13 @@ static int attach_uprobes(struct memleak_bpf *obj)
 					target_pid ? : -1, libc_path, func_off);
 	err = libbpf_get_error(obj->links.posix_memalign_return);
 	if (err) {
-		warn("failed to attach posix_memalign_return: %d\n", err);
+		p_warn("failed to attach posix_memalign_return: %d", err);
 		return -1;
 	}
 
 	func_off = get_elf_func_offset(libc_path, "aligned_alloc");
 	if (func_off < 0) {
-		warn("could not find aligned_alloc in %s\n", libc_path);
+		p_warn("could not find aligned_alloc in %s", libc_path);
 		return -1;
 	}
 	obj->links.aligned_alloc_entry =
@@ -411,7 +435,7 @@ static int attach_uprobes(struct memleak_bpf *obj)
 					target_pid ? : -1, libc_path, func_off);
 	err = libbpf_get_error(obj->links.aligned_alloc_entry);
 	if (err) {
-		warn("failed to attach aligned_alloc_entry: %d\n", err);
+		p_warn("failed to attach aligned_alloc_entry: %d", err);
 		return -1;
 	}
 	obj->links.aligned_alloc_return =
@@ -419,13 +443,13 @@ static int attach_uprobes(struct memleak_bpf *obj)
 					target_pid ? : -1, libc_path, func_off);
 	err = libbpf_get_error(obj->links.aligned_alloc_return);
 	if (err) {
-		warn("failed to attach aligned_alloc_return: %d\n", err);
+		p_warn("failed to attach aligned_alloc_return: %d", err);
 		return -1;
 	}
 
 	func_off = get_elf_func_offset(libc_path, "valloc");
 	if (func_off < 0) {
-		warn("could not find valloc in %s\n", libc_path);
+		p_warn("could not find valloc in %s", libc_path);
 		return -1;
 	}
 	obj->links.valloc_entry =
@@ -433,7 +457,7 @@ static int attach_uprobes(struct memleak_bpf *obj)
 					target_pid ? : -1, libc_path, func_off);
 	err = libbpf_get_error(obj->links.valloc_entry);
 	if (err) {
-		warn("failed to attach valloc_entry: %d\n", err);
+		p_warn("failed to attach valloc_entry: %d", err);
 		return -1;
 	}
 	obj->links.valloc_return =
@@ -441,13 +465,13 @@ static int attach_uprobes(struct memleak_bpf *obj)
 					target_pid ? : -1, libc_path, func_off);
 	err = libbpf_get_error(obj->links.valloc_return);
 	if (err) {
-		warn("failed to attach valloc_return: %d\n", err);
+		p_warn("failed to attach valloc_return: %d", err);
 		return -1;
 	}
 
 	func_off = get_elf_func_offset(libc_path, "memalign");
 	if (func_off < 0) {
-		warn("could not find memalign in %s\n", libc_path);
+		p_warn("could not find memalign in %s", libc_path);
 		return -1;
 	}
 	obj->links.memalign_entry =
@@ -455,7 +479,7 @@ static int attach_uprobes(struct memleak_bpf *obj)
 					target_pid ? : -1, libc_path, func_off);
 	err = libbpf_get_error(obj->links.memalign_entry);
 	if (err) {
-		warn("failed to attach memalign_entry: %d\n", err);
+		p_warn("failed to attach memalign_entry: %d", err);
 		return -1;
 	}
 	obj->links.memalign_return =
@@ -463,13 +487,13 @@ static int attach_uprobes(struct memleak_bpf *obj)
 					target_pid ? : -1, libc_path, func_off);
 	err = libbpf_get_error(obj->links.memalign_return);
 	if (err) {
-		warn("failed to attach memalign_return: %d\n", err);
+		p_warn("failed to attach memalign_return: %d", err);
 		return -1;
 	}
 
 	func_off = get_elf_func_offset(libc_path, "pvalloc");
 	if (func_off < 0) {
-		warn("could not find pvalloc in %s\n", libc_path);
+		p_warn("could not find pvalloc in %s", libc_path);
 		return -1;
 	}
 	obj->links.pvalloc_entry =
@@ -477,7 +501,7 @@ static int attach_uprobes(struct memleak_bpf *obj)
 					target_pid ? : -1, libc_path, func_off);
 	err = libbpf_get_error(obj->links.pvalloc_entry);
 	if (err) {
-		warn("failed to attach pvalloc_entry: %d\n", err);
+		p_warn("failed to attach pvalloc_entry: %d", err);
 		return -1;
 	}
 	obj->links.pvalloc_return =
@@ -485,7 +509,7 @@ static int attach_uprobes(struct memleak_bpf *obj)
 					target_pid ? : -1, libc_path, func_off);
 	err = libbpf_get_error(obj->links.pvalloc_return);
 	if (err) {
-		warn("failed to attach pvalloc_return: %d\n", err);
+		p_warn("failed to attach pvalloc_return: %d", err);
 		return -1;
 	}
 
@@ -519,13 +543,13 @@ int main(int argc, char **argv)
 
 	err = bump_memlock_rlimit();
 	if (err) {
-		warn("failed to increase rlimit: %d\n", err);
+		p_err("failed to increase rlimit: %d", err);
 		return 1;
 	}
 
 	obj = memleak_bpf__open();
 	if (!obj) {
-		warn("failed to open BPF object\n");
+		p_err("failed to open BPF object");
 		return 1;
 	}
 
@@ -540,26 +564,26 @@ int main(int argc, char **argv)
 
 	err = memleak_bpf__load(obj);
 	if (err) {
-		warn("failed to load BPF object: %d\n", err);
+		p_err("failed to load BPF object: %d", err);
 		goto cleanup;
 	}
 
 	//err = memleak_bpf__attach(obj);
 	err = attach_probes(obj);
 	if (err) {
-		warn("failed to attach BPF programs\n");
+		p_err("failed to attach BPF programs");
 		goto cleanup;
 	}
 
 	ksyms = ksyms__load();
 	if (!ksyms) {
-		warn("failed to load kallsyms\n");
+		p_err("failed to load kallsyms");
 		goto cleanup;
 	}
 
 	syms_cache = syms_cache__new(0);
 	if (!syms_cache) {
-		warn("failed to load kallsyms\n");
+		p_err("failed to load kallsyms");
 		goto cleanup;
 	}
 
