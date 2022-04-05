@@ -138,7 +138,7 @@ static void print_outstanding(struct ksyms *ksyms, struct syms_cache *syms_cache
 	const struct ksym *ksym;
 	const struct syms *syms;
 	const struct sym *sym;
-	int i, j, err, ifd, sfd, rows = 0;
+	int i, j, err, ifd, sfd, rows = 0, stack_id;
 	struct alloc_info_t val;
 	time_t timer;
 	struct tm *t;
@@ -160,21 +160,16 @@ static void print_outstanding(struct ksyms *ksyms, struct syms_cache *syms_cache
 			return;
 		}
 		lookup_key = next_key;
-		if (val.kern_stack_id < 0 || target_pid)
-			goto print_ustack;
+		stack_id = val.kern_stack_id;
 
-		if (bpf_map_lookup_elem(sfd, &val.kern_stack_id, stack_ips[rows].ip))
+		if (stack_id < 0 || target_pid)
+			stack_id = val.user_stack_id;
+
+		if (bpf_map_lookup_elem(sfd, &stack_id, stack_ips[rows].ip))
 			continue;
 
-		goto skip_ustack;
-
-print_ustack:
-		if (val.user_stack_id < 0 ||
-			bpf_map_lookup_elem(sfd, &val.user_stack_id, stack_ips[rows].ip))
-			continue;
-
-skip_ustack:
-		stack_ips[rows++].size = val.size;
+		stack_ips[rows].size = val.size;
+		rows++;
 	}
 
 	qsort(stack_ips, rows, sizeof(struct ip_stat), compar);
