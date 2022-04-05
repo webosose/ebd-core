@@ -152,8 +152,8 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 
 static int compar(const void *a, const void *b)
 {
-	__u64 x = ((struct ip_stat *) a)->size;
-	__u64 y = ((struct ip_stat *) b)->size;
+	__u64 x = ((struct alloc_stack *) a)->size;
+	__u64 y = ((struct alloc_stack *) b)->size;
 	return x > y ? -1 : !(x == y);
 }
 
@@ -164,17 +164,30 @@ static void print_outstanding(struct ksyms *ksyms, struct syms_cache *syms_cache
 	const struct ksym *ksym;
 	const struct syms *syms;
 	const struct sym *sym;
-	int i, j, err, ifd, sfd, rows = 0, stack_id;
+	int i, j, err, ifd, sfd, rows = 0;
+	unsigned long *ip;
 	struct alloc_info_t val;
+	struct alloc_stack *stack, *stacks;
 	time_t timer;
 	struct tm *t;
-	static struct ip_stat stack_ips[MAX_ENTRIES];
 
 	timer = time(NULL);
 	t = localtime(&timer);
 
 	printf("\n[%02d:%02d:%02d] Top %u stacks with outstanding allocations:\n",
 		t->tm_hour, t->tm_min, t->tm_sec, env.top);
+
+	ip = calloc(env.perf_max_stack_depth, sizeof(*ip));
+	if (!ip) {
+		p_err("failed to allocation memory of stack trace");
+		return;
+	}
+
+	stacks = calloc(MAX_ENTRIES, sizeof(*stacks));
+	if (!stacks) {
+		p_err("failed to allocation memory of stack info");
+		goto cleanup;
+	}
 
 	ifd = bpf_map__fd(obj->maps.allocs);
 	sfd = bpf_map__fd(obj->maps.stack_traces);
@@ -183,66 +196,87 @@ static void print_outstanding(struct ksyms *ksyms, struct syms_cache *syms_cache
 		err = bpf_map_lookup_elem(ifd, &next_key, &val);
 		if (err < 0) {
 			p_warn("no entry found!");
-			return;
+			goto cleanup;
 		}
 		lookup_key = next_key;
-		stack_id = val.kern_stack_id;
 
-		if (stack_id < 0 || target_pid)
-			stack_id = val.user_stack_id;
-
-		if (bpf_map_lookup_elem(sfd, &stack_id, stack_ips[rows].ip))
+		stack = NULL;
+		for (i = 0; i < MAX_ENTRIES; i++) {
+			if (stacks[i].stack_id == val.stack_id) {
+				stack = &stacks[i];
+				break;
+			}
+			if (stacks[i].stack_id == 0) {
+				stack = &stacks[i];
+				stack->stack_id = val.stack_id;
+				rows++;
+				break;
+			}
+		}
+		if (stack == NULL)
 			continue;
 
-		stack_ips[rows].size = val.size;
-		rows++;
+		stack->size += val.size;
+		stack->nr++;
 	}
 
-	qsort(stack_ips, rows, sizeof(struct ip_stat), compar);
+	qsort(stacks, rows, sizeof(*stacks), compar);
 	rows = rows < env.top ? rows : env.top;
 
 	if (env.kernel_threads_only || !target_pid) {
 		for (i = 0; i < rows; i++) {
-			printf("\t[%d] %lld bytes in %d allocations from stack\n",
-					i + 1, stack_ips[i].size, 1);
-			for (j = 0; j < env.perf_max_stack_depth && stack_ips[i].ip[j]; j++) {
-				ksym = ksyms__map_addr(ksyms, stack_ips[i].ip[j]);
+			if (bpf_map_lookup_elem(sfd, &stacks[i].stack_id, ip) != 0) {
+				p_warn("\t[Missed Kernel Stack]");
+				continue;
+			}
+
+			printf("\t[%d] %d bytes in %d allocations from kernel stack\n",
+				i + 1, stacks[i].size, stacks[i].nr);
+			for (j = 0; j < env.perf_max_stack_depth && ip[j]; j++) {
+				ksym = ksyms__map_addr(ksyms, ip[j]);
 				if (ksym) {
-					ptrdiff_t diff = stack_ips[i].ip[j] - ksym->addr;
 					printf("\t#%-2d 0x%lx %s+0x%lx\n", j + 1,
-						stack_ips[i].ip[j], ksym->name, diff);
+						ip[j], ksym->name, ip[j] - ksym->addr);
 				} else
-					printf("\t#%-2d 0x%lx [unknown]\n", j + 1,
-						stack_ips[i].ip[j]);
+					printf("\t#%-2d 0x%lx [unknown]\n", j + 1, ip[j]);
 			}
 			printf("\n");
 		}
-		return;
-	}
+	} else {
+		syms = syms_cache__get_syms(syms_cache, val.pid);
 
-	syms = syms_cache__get_syms(syms_cache, val.pid);
-
-	for (i = 0; i < rows; i++) {
-		printf("\t[%d] %lld bytes in %d allocations from user stack\n",
-				i + 1, stack_ips[i].size, 1);
-		for (j = 0; j < env.perf_max_stack_depth && stack_ips[i].ip[j]; j++) {
-			if (!syms)
-				printf("\t#%-2d 0x%016lx [unknown]\n", j + 1, stack_ips[i].ip[j]);
-			else {
-				char *dso_name = NULL;
-				uint64_t dso_offset = 0;
-				sym = syms__map_addr_dso(syms, stack_ips[i].ip[j],
-						   &dso_name, &dso_offset);
-				printf("\t#%-2d %#016lx", j + 1, stack_ips[i].ip[j]);
-				if (sym)
-					printf(" %s+0x%lx", sym->name, sym->offset);
-				if (dso_name)
-					printf(" (%s_0x%lx)", dso_name, dso_offset);
-				printf("\n");
+		for (i = 0; i < rows; i++) {
+			if (bpf_map_lookup_elem(sfd, &stacks[i].stack_id, ip) != 0) {
+				p_warn("\t[Missed User Stack]");
+				continue;
 			}
+
+			printf("\t[%d] %d bytes in %d allocations from user stack\n",
+				i + 1, stacks[i].size, stacks[i].nr);
+			for (j = 0; j < env.perf_max_stack_depth && ip[j]; j++) {
+				if (!syms)
+					printf("\t#%-2d 0x%016lx [unknown]\n", j + 1, ip[j]);
+				else {
+					char *dso_name = NULL;
+					uint64_t dso_offset = 0;
+					sym = syms__map_addr_dso(syms, ip[j], &dso_name, &dso_offset);
+					printf("\t#%-2d %#016lx", j + 1, ip[j]);
+					if (sym)
+						printf(" %s+0x%lx", sym->name, sym->offset);
+					if (dso_name)
+						printf(" (%s_0x%lx)", dso_name, dso_offset);
+					printf("\n");
+				}
+			}
+			printf("\t%-16s %s (%d)\n\n", "-", val.comm, val.pid);
 		}
-		printf("    %-16s %s (%d)\n\n", "-", val.comm, val.pid);
 	}
+
+cleanup:
+	if (stacks)
+		free(stacks);
+	if (ip)
+		free(ip);
 }
 
 static int get_libc_path(char *path)

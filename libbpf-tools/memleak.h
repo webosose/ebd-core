@@ -23,9 +23,10 @@ struct combined_alloc_info_t {
 	__u64 number_of_allocs;
 };
 
-struct ip_stat {
-	__u64 size;
-	unsigned long ip[BPF_MAX_STACK_DEPTH];
+struct alloc_stack {
+	uint64_t stack_id;
+	int size;
+	int nr;
 };
 
 #endif

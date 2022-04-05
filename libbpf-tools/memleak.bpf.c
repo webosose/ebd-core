@@ -112,11 +112,13 @@ int gen_alloc_exit2(struct pt_regs *ctx, u64 address)
 		info.pid = pid;
 		bpf_get_current_comm(&info.comm, sizeof(info.comm));
 		info.timestamp_ns = bpf_ktime_get_ns();
-		//info.stack_id = bpf_get_stackid(ctx, &stack_traces, 0);
 		info.kern_stack_id = bpf_get_stackid(ctx, &stack_traces, 0);
 		info.user_stack_id = bpf_get_stackid(ctx, &stack_traces, BPF_F_USER_STACK);
 
-		info.stack_id = info.kern_stack_id > 0 ?: info.user_stack_id;
+		if (info.kern_stack_id > 0)
+			info.stack_id = info.kern_stack_id;
+		else
+			info.stack_id = info.user_stack_id;
 
 		bpf_map_update_elem(&allocs, &address, &info, BPF_OK);
 		update_statistics_add(info.stack_id, info.size);
