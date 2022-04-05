@@ -24,6 +24,7 @@ static struct env {
 	int stack_storage_size;
 	int perf_max_stack_depth;
 	int duration;
+	int top;
 	bool verbose;
 } env = {
 	.pid = -1,
@@ -31,10 +32,10 @@ static struct env {
 	.stack_storage_size = 1024,
 	.perf_max_stack_depth = BPF_MAX_STACK_DEPTH,
 	.duration = 5,
+	.top = 10,
 };
 
 static pid_t target_pid = 0;
-static pid_t top_stacks = 10;
 static const char *libc_path = NULL;
 
 const char *argp_program_version = "memleak 0.1";
@@ -44,7 +45,12 @@ const char argp_program_doc[] =
 "Trace outstanding memory allocations that weren't freed.\n"
 "Supports both user-mode allocations made with libc functions and kernel-mode\n"
 "allocations made with kmalloc/kmem_cache_alloc/get_free_pages and\n"
-"corresponding memory release functions.\n";
+"corresponding memory release functions.\n"
+"\n"
+"USAGE: memleak [-h] [-p PID] [-t] [-a] [-o OLDER] [-c COMMAND]\n"
+"                [--combined-only] [--wa-missing-free] [-s SAMPLE_RATE]\n"
+"                [-T TOP] [-z MIN_SIZE] [-Z MAX_SIZE] [-O OBJ]\n"
+"                [interval] [count]\n";
 
 #define OPT_PERF_MAX_STACK_DEPTH	1 /* --pef-max-stack-depth */
 #define OPT_STACK_STORAGE_SIZE		2 /* --stack-storage-size */
@@ -74,7 +80,7 @@ static int libbpf_print_fn(enum libbpf_print_level level,
 
 static error_t parse_arg(int key, char *arg, struct argp_state *state)
 {
-	long pid, top;
+	long pid;
 
 	switch (key) {
 	case 'h':
@@ -88,10 +94,6 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 			argp_usage(state);
 		}
 		target_pid = pid;
-		break;
-	case 'T':
-		top = strtol(arg, NULL, 10);
-		top_stacks = top;
 		break;
 	case 'v':
 		env.verbose = true;
@@ -148,7 +150,7 @@ static void print_outstanding(struct ksyms *ksyms, struct syms_cache *syms_cache
 	t = localtime(&timer);
 
 	printf("\n[%02d:%02d:%02d] Top %u stacks with outstanding allocations:\n",
-		t->tm_hour, t->tm_min, t->tm_sec, top_stacks);
+		t->tm_hour, t->tm_min, t->tm_sec, env.top);
 
 	ifd = bpf_map__fd(obj->maps.allocs);
 	sfd = bpf_map__fd(obj->maps.stack_traces);
@@ -173,11 +175,12 @@ static void print_outstanding(struct ksyms *ksyms, struct syms_cache *syms_cache
 	}
 
 	qsort(stack_ips, rows, sizeof(struct ip_stat), compar);
-	rows = rows < top_stacks ? rows : top_stacks;
+	rows = rows < env.top ? rows : env.top;
 
 	if (env.kernel_threads_only || !target_pid) {
 		for (i = 0; i < rows; i++) {
-			printf("\t%lld bytes in %d allocations from stack\n", stack_ips[i].size, 1);
+			printf("\t[%d] %lld bytes in %d allocations from stack\n",
+					i + 1, stack_ips[i].size, 1);
 			for (j = 0; j < env.perf_max_stack_depth && stack_ips[i].ip[j]; j++) {
 				ksym = ksyms__map_addr(ksyms, stack_ips[i].ip[j]);
 				if (ksym) {
@@ -196,7 +199,8 @@ static void print_outstanding(struct ksyms *ksyms, struct syms_cache *syms_cache
 	syms = syms_cache__get_syms(syms_cache, val.pid);
 
 	for (i = 0; i < rows; i++) {
-		printf("\t%lld bytes in %d allocations from user stack\n", stack_ips[i].size, 1);
+		printf("\t[%d] %lld bytes in %d allocations from user stack\n",
+				i + 1, stack_ips[i].size, 1);
 		for (j = 0; j < env.perf_max_stack_depth && stack_ips[i].ip[j]; j++) {
 			if (!syms)
 				printf("\t#%-2d 0x%016lx [unknown]\n", j + 1, stack_ips[i].ip[j]);
