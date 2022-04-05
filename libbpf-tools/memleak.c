@@ -119,6 +119,9 @@ static error_t parse_arg(int key, char *arg, struct argp_state *state)
 		}
 		target_pid = pid;
 		break;
+	case 'T':
+		env.top = strtol(arg, NULL, 10);
+		break;
 	case 'v':
 		env.verbose = true;
 		break;
@@ -221,7 +224,9 @@ static void print_outstanding(struct ksyms *ksyms, struct syms_cache *syms_cache
 	}
 
 	qsort(stacks, rows, sizeof(*stacks), compar);
-	rows = rows < env.top ? rows : env.top;
+
+	if (rows > env.top)
+		rows = env.top;
 
 	if (env.kernel_threads_only || !target_pid) {
 		for (i = 0; i < rows; i++) {
